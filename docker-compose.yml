@@ -3,26 +3,29 @@ version: '3.8'
 # =============================================================================
 # Telephony Service Docker Compose
 # =============================================================================
-# This stack includes the TTS service (openai-edge-tts) for the telephony
-# integration. It is isolated from other Docker containers on the VM.
+# TTS service for Asterisk telephony integration
+# Isolated network to not interfere with existing containers
 # =============================================================================
 
 services:
   # ---------------------------------------------------------------------------
-  # OpenAI Edge TTS Service
-  # Provides OpenAI-compatible TTS API endpoint
+  # Edge TTS Service (OpenAI-compatible API)
+  # Uses Microsoft Edge TTS - works well on ARM64
   # ---------------------------------------------------------------------------
-  openai-edge-tts:
-    image: rhasspy/wyoming-piper:latest
+  edge-tts:
+    image: python:3.11-slim
     container_name: telephony-tts
     restart: unless-stopped
+    working_dir: /app
     ports:
       - "127.0.0.1:5050:5050"
     environment:
       - TZ=UTC
     volumes:
       - ./sounds:/app/sounds
-      - tts-cache:/app/cache
+      - ./scripts:/app/scripts
+    command: >
+      bash -c "pip install --no-cache-dir edge-tts flask && python /app/scripts/tts-server.py"
     networks:
       - telephony-network
     healthcheck:
@@ -30,33 +33,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-
-  # ---------------------------------------------------------------------------
-  # Alternative: Using openedai-speech (OpenAI TTS compatible)
-  # Uncomment this if you prefer openedai-speech over piper
-  # ---------------------------------------------------------------------------
-  # openedai-speech:
-  #   image: ghcr.io/matatonic/openedai-speech-arm64:latest
-  #   container_name: telephony-tts
-  #   restart: unless-stopped
-  #   ports:
-  #     - "127.0.0.1:5050:8000"
-  #   environment:
-  #     - TTS_HOME=/app/voices
-  #   volumes:
-  #     - tts-voices:/app/voices
-  #     - ./sounds:/app/sounds
-  #   networks:
-  #     - telephony-network
+      start_period: 30s
 
 networks:
   telephony-network:
     name: telephony-network
     driver: bridge
-
-volumes:
-  tts-cache:
-    name: telephony-tts-cache
-  tts-voices:
-    name: telephony-tts-voices

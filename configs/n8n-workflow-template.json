@@ -1,0 +1,143 @@
+{
+    "name": "Asterisk Telephony - AI Voice Assistant",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "asterisk-call",
+                "responseMode": "responseNode",
+                "options": {}
+            },
+            "id": "webhook-trigger",
+            "name": "Asterisk Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                240,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://api.openai.com/v1/chat/completions",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpHeaderAuth",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a helpful AI phone assistant. Keep responses brief and conversational, under 2 sentences. The caller's phone number is {{ $json.caller_id }}.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"A caller just connected. Greet them warmly and ask how you can help.\"\n    }\n  ],\n  \"max_tokens\": 100\n}",
+                "options": {}
+            },
+            "id": "llm-request",
+            "name": "Call OpenAI LLM",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                460,
+                300
+            ],
+            "credentials": {
+                "httpHeaderAuth": {
+                    "id": "YOUR_OPENAI_CREDENTIAL_ID",
+                    "name": "OpenAI API Key"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "http://localhost:5050/v1/tts/generate",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={\n  \"input\": \"{{ $json.choices[0].message.content }}\",\n  \"unique_id\": \"{{ $('Asterisk Webhook').item.json.unique_id }}\",\n  \"voice\": \"alloy\"\n}",
+                "options": {}
+            },
+            "id": "tts-request",
+            "name": "Generate TTS Audio",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                680,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={\n  \"status\": \"success\",\n  \"text_response\": \"{{ $('Call OpenAI LLM').item.json.choices[0].message.content }}\",\n  \"audio_file\": \"{{ $json.audio_file }}\",\n  \"caller_id\": \"{{ $('Asterisk Webhook').item.json.caller_id }}\",\n  \"unique_id\": \"{{ $('Asterisk Webhook').item.json.unique_id }}\"\n}",
+                "options": {}
+            },
+            "id": "respond-webhook",
+            "name": "Respond to Asterisk",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1.1,
+            "position": [
+                900,
+                300
+            ]
+        }
+    ],
+    "connections": {
+        "Asterisk Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Call OpenAI LLM",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Call OpenAI LLM": {
+            "main": [
+                [
+                    {
+                        "node": "Generate TTS Audio",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Generate TTS Audio": {
+            "main": [
+                [
+                    {
+                        "node": "Respond to Asterisk",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "staticData": null,
+    "tags": [
+        "telephony",
+        "asterisk",
+        "ai",
+        "tts"
+    ]
+}
