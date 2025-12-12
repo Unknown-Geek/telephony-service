@@ -53,3 +53,37 @@ This document details the successful integration of Asterisk with Twilio Elastic
 ## Next Steps
 - Implement incoming call handling in `n8n`.
 - Configure production dialplan logic.
+
+## Real-Time Conversational AI Service
+**Status:** ✅ Implemented & Deployed
+
+### 1. Outbound Call Trigger
+Start an AI call by sending a POST request to the internal API:
+- **URL:** `http://<your-server-ip>:3030/call`
+- **Method:** `POST`
+- **Body:**
+```json
+{
+  "phoneNumber": "+919074691700",
+  "context": "outbound-ai-conversational"
+}
+```
+
+### 2. Conversational Logic
+The system implements a continuous loop:
+1.  **Call Triggered** -> User Answers.
+2.  **Greetings**: Asterisk calls n8n (`mode=welcome`).
+3.  **Recording**: Asterisk records user audio (max 10s or silence).
+4.  **Processing**: AGI uploads audio to n8n Webhook (`mode=process_input`).
+5.  **Response**: n8n returns Audio URL or Text (handled by local TTS).
+6.  **Loop**: Plays response and goes back to Recording.
+
+### 3. n8n Configuration (Required)
+To activate the intelligence, you must configure n8n:
+1.  **Import Workflow**: Use `configs/n8n-workflow-template.json`.
+2.  **Webhook Node**: Ensure it accepts `POST` and has **Binary Data** enabled (property: `file`).
+3.  **Credentials**: Add your OpenAI API key to the Whisper and ChatGPT nodes.
+4.  **Activate**: Turn on the workflow.
+
+**Note:** If n8n is not configured, the call will connect but result in silence or fallback behavior.
+
