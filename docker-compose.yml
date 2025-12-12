@@ -1,0 +1,62 @@
+version: '3.8'
+
+# =============================================================================
+# Telephony Service Docker Compose
+# =============================================================================
+# This stack includes the TTS service (openai-edge-tts) for the telephony
+# integration. It is isolated from other Docker containers on the VM.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # OpenAI Edge TTS Service
+  # Provides OpenAI-compatible TTS API endpoint
+  # ---------------------------------------------------------------------------
+  openai-edge-tts:
+    image: rhasspy/wyoming-piper:latest
+    container_name: telephony-tts
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5050:5050"
+    environment:
+      - TZ=UTC
+    volumes:
+      - ./sounds:/app/sounds
+      - tts-cache:/app/cache
+    networks:
+      - telephony-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Alternative: Using openedai-speech (OpenAI TTS compatible)
+  # Uncomment this if you prefer openedai-speech over piper
+  # ---------------------------------------------------------------------------
+  # openedai-speech:
+  #   image: ghcr.io/matatonic/openedai-speech-arm64:latest
+  #   container_name: telephony-tts
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:5050:8000"
+  #   environment:
+  #     - TTS_HOME=/app/voices
+  #   volumes:
+  #     - tts-voices:/app/voices
+  #     - ./sounds:/app/sounds
+  #   networks:
+  #     - telephony-network
+
+networks:
+  telephony-network:
+    name: telephony-network
+    driver: bridge
+
+volumes:
+  tts-cache:
+    name: telephony-tts-cache
+  tts-voices:
+    name: telephony-tts-voices

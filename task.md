@@ -2,8 +2,8 @@
 
 ## Phase 1: VM and Asterisk Setup
 - [x] 1.1 Install system prerequisites and dependencies
-- [/] 1.2 Download and compile Asterisk for ARM64
-- [ ] 1.3 Install Asterisk configuration samples and systemd service
+- [x] 1.2 Download and compile Asterisk for ARM64
+- [x] 1.3 Install Asterisk configuration samples and systemd service
 
 ## Phase 2: Telephony and Service Integration
 - [ ] 2.1 Configure Asterisk (PJSIP, extensions, modules)
