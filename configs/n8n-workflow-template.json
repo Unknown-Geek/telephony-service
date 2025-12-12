@@ -1,143 +1,229 @@
 {
-    "name": "Asterisk Telephony - AI Voice Assistant",
     "nodes": [
         {
             "parameters": {
                 "httpMethod": "POST",
                 "path": "asterisk-call",
-                "responseMode": "responseNode",
-                "options": {}
+                "options": {
+                    "binaryData": true
+                }
             },
-            "id": "webhook-trigger",
-            "name": "Asterisk Webhook",
+            "name": "Webhook",
             "type": "n8n-nodes-base.webhook",
-            "typeVersion": 2,
+            "typeVersion": 1,
             "position": [
-                240,
+                250,
                 300
             ]
         },
         {
             "parameters": {
-                "method": "POST",
-                "url": "https://api.openai.com/v1/chat/completions",
-                "authentication": "genericCredentialType",
-                "genericAuthType": "httpHeaderAuth",
-                "sendHeaders": true,
-                "headerParameters": {
-                    "parameters": [
+                "dataType": "string",
+                "value1": "={{$json.body.mode}}",
+                "rules": {
+                    "rules": [
                         {
-                            "name": "Content-Type",
-                            "value": "application/json"
+                            "value2": "welcome"
+                        },
+                        {
+                            "value2": "process_input"
                         }
                     ]
-                },
-                "sendBody": true,
-                "specifyBody": "json",
-                "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a helpful AI phone assistant. Keep responses brief and conversational, under 2 sentences. The caller's phone number is {{ $json.caller_id }}.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"A caller just connected. Greet them warmly and ask how you can help.\"\n    }\n  ],\n  \"max_tokens\": 100\n}",
+                }
+            },
+            "name": "Switch Mode",
+            "type": "n8n-nodes-base.switch",
+            "typeVersion": 1,
+            "position": [
+                450,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "values": {
+                    "string": [
+                        {
+                            "name": "text_response",
+                            "value": "Hello! I am your AI assistant. How can I help you today?"
+                        }
+                    ]
+                }
+            },
+            "name": "Welcome Message",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 1,
+            "position": [
+                650,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "binaryPropertyName": "file",
                 "options": {}
             },
-            "id": "llm-request",
-            "name": "Call OpenAI LLM",
-            "type": "n8n-nodes-base.httpRequest",
-            "typeVersion": 4.2,
+            "name": "Whisper STT",
+            "type": "n8n-nodes-base.openAi",
+            "typeVersion": 1,
             "position": [
-                460,
-                300
+                650,
+                450
             ],
             "credentials": {
-                "httpHeaderAuth": {
-                    "id": "YOUR_OPENAI_CREDENTIAL_ID",
-                    "name": "OpenAI API Key"
+                "openAiApi": {
+                    "id": "YOUR_CREDENTIAL_ID_HERE",
+                    "name": "OpenAI account"
                 }
             }
         },
         {
             "parameters": {
-                "method": "POST",
-                "url": "http://localhost:5050/v1/tts/generate",
-                "sendHeaders": true,
-                "headerParameters": {
-                    "parameters": [
+                "model": "gpt-3.5-turbo",
+                "prompt": {
+                    "messages": [
                         {
-                            "name": "Content-Type",
-                            "value": "application/json"
+                            "role": "user",
+                            "content": "={{$json.text}}"
                         }
                     ]
-                },
-                "sendBody": true,
-                "specifyBody": "json",
-                "jsonBody": "={\n  \"input\": \"{{ $json.choices[0].message.content }}\",\n  \"unique_id\": \"{{ $('Asterisk Webhook').item.json.unique_id }}\",\n  \"voice\": \"alloy\"\n}",
+                }
+            },
+            "name": "ChatGPT",
+            "type": "n8n-nodes-base.openAi",
+            "typeVersion": 1,
+            "position": [
+                850,
+                450
+            ],
+            "credentials": {
+                "openAiApi": {
+                    "id": "YOUR_CREDENTIAL_ID_HERE",
+                    "name": "OpenAI account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "audio",
+                "text": "={{$json.message.content}}",
+                "voice": "alloy",
                 "options": {}
             },
-            "id": "tts-request",
-            "name": "Generate TTS Audio",
-            "type": "n8n-nodes-base.httpRequest",
-            "typeVersion": 4.2,
+            "name": "OpenAI TTS",
+            "type": "n8n-nodes-base.openAi",
+            "typeVersion": 1,
             "position": [
-                680,
-                300
+                1050,
+                450
+            ],
+            "credentials": {
+                "openAiApi": {
+                    "id": "YOUR_CREDENTIAL_ID_HERE",
+                    "name": "OpenAI account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "options": {}
+            },
+            "name": "Return Audio",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                1250,
+                450
             ]
         },
         {
             "parameters": {
                 "respondWith": "json",
-                "responseBody": "={\n  \"status\": \"success\",\n  \"text_response\": \"{{ $('Call OpenAI LLM').item.json.choices[0].message.content }}\",\n  \"audio_file\": \"{{ $json.audio_file }}\",\n  \"caller_id\": \"{{ $('Asterisk Webhook').item.json.caller_id }}\",\n  \"unique_id\": \"{{ $('Asterisk Webhook').item.json.unique_id }}\"\n}",
+                "responseBody": "={{JSON.stringify($json)}}",
                 "options": {}
             },
-            "id": "respond-webhook",
-            "name": "Respond to Asterisk",
+            "name": "Return Text",
             "type": "n8n-nodes-base.respondToWebhook",
-            "typeVersion": 1.1,
+            "typeVersion": 1,
             "position": [
-                900,
-                300
+                850,
+                100
             ]
         }
     ],
     "connections": {
-        "Asterisk Webhook": {
+        "Webhook": {
             "main": [
                 [
                     {
-                        "node": "Call OpenAI LLM",
+                        "node": "Switch Mode",
                         "type": "main",
                         "index": 0
                     }
                 ]
             ]
         },
-        "Call OpenAI LLM": {
+        "Switch Mode": {
             "main": [
                 [
                     {
-                        "node": "Generate TTS Audio",
+                        "node": "Welcome Message",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Whisper STT",
                         "type": "main",
                         "index": 0
                     }
                 ]
             ]
         },
-        "Generate TTS Audio": {
+        "Welcome Message": {
             "main": [
                 [
                     {
-                        "node": "Respond to Asterisk",
+                        "node": "Return Text",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Whisper STT": {
+            "main": [
+                [
+                    {
+                        "node": "ChatGPT",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "ChatGPT": {
+            "main": [
+                [
+                    {
+                        "node": "OpenAI TTS",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "OpenAI TTS": {
+            "main": [
+                [
+                    {
+                        "node": "Return Audio",
                         "type": "main",
                         "index": 0
                     }
                 ]
             ]
         }
-    },
-    "settings": {
-        "executionOrder": "v1"
-    },
-    "staticData": null,
-    "tags": [
-        "telephony",
-        "asterisk",
-        "ai",
-        "tts"
-    ]
+    }
 }

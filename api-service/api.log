@@ -1,0 +1,13 @@
+Asterisk Trigger API listening at http://localhost:3030
+Received request to call +919074691700 using context outbound-ai-test
+Executing: sudo asterisk -rx "channel originate PJSIP/+919074691700@twilio-endpoint extension s@outbound-ai-test"
+Stdout: 
+Received request to call +919074691700 using context outbound-ai-conversational
+Executing: sudo asterisk -rx "channel originate PJSIP/+919074691700@twilio-endpoint extension s@outbound-ai-conversational"
+Stdout: 
+Received request to call +919074691700 using context outbound-ai-conversational
+Executing: sudo asterisk -rx "channel originate PJSIP/+919074691700@twilio-endpoint extension s@outbound-ai-conversational"
+Stdout: 
+Received request to call +919074691700 using context outbound-ai-conversational
+Executing: sudo asterisk -rx "channel originate PJSIP/+919074691700@twilio-endpoint extension s@outbound-ai-conversational"
+Stdout: 
