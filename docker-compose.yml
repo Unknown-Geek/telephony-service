@@ -9,6 +9,31 @@ version: '3.8'
 
 services:
   # ---------------------------------------------------------------------------
+  # Asterisk PBX with PJSIP
+  # Using host network for optimal SIP/RTP performance (no NAT issues)
+  # ---------------------------------------------------------------------------
+  asterisk:
+    image: andrius/asterisk:latest
+    container_name: telephony-asterisk
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TZ=UTC
+    volumes:
+      - ./configs/pjsip.conf:/etc/asterisk/pjsip.conf:ro
+      - ./configs/extensions.conf:/etc/asterisk/extensions.conf:ro
+      - ./configs/modules.conf:/etc/asterisk/modules.conf:ro
+      - ./sounds:/var/lib/asterisk/sounds/custom
+      - ./scripts:/var/lib/asterisk/agi-bin
+      - asterisk-logs:/var/log/asterisk
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    depends_on:
+      edge-tts:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
   # Edge TTS Service (OpenAI-compatible API)
   # Uses Microsoft Edge TTS - works well on ARM64
   # ---------------------------------------------------------------------------
@@ -39,3 +64,6 @@ networks:
   telephony-network:
     name: telephony-network
     driver: bridge
+
+volumes:
+  asterisk-logs:
