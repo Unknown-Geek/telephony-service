@@ -85,6 +85,7 @@ services:
   # ---------------------------------------------------------------------------
   # API Trigger Service (Call Initiation)
   # HTTP API to start outbound calls
+  # Uses host network to access Asterisk directly
   # ---------------------------------------------------------------------------
   api-trigger:
     build:
@@ -92,14 +93,13 @@ services:
       dockerfile: docker/Dockerfile.api
     container_name: telephony-api
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:3030:3030"
+    network_mode: host
     environment:
-      - ASTERISK_HOST=${ASTERISK_HOST:-host.docker.internal}
-    networks:
-      - telephony-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - PORT=3030
+      - ASTERISK_HOST=localhost
+    volumes:
+      - /usr/sbin/asterisk:/usr/sbin/asterisk:ro
+      - /var/run/asterisk:/var/run/asterisk
     depends_on:
       - edge-tts
       - whisper-stt
