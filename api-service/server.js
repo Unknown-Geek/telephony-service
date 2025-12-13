@@ -1,11 +1,22 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 const port = process.env.PORT || 3030;
 
-// Asterisk host - use host.docker.internal in Docker, localhost otherwise
 const ASTERISK_HOST = process.env.ASTERISK_HOST || 'localhost';
+const CONVERSATION_DIR = '/var/lib/asterisk/conversations';
+
+// Ensure conversation directory exists
+try {
+    if (!fs.existsSync(CONVERSATION_DIR)) {
+        fs.mkdirSync(CONVERSATION_DIR, { recursive: true });
+    }
+} catch (e) {
+    console.warn('Could not create conversation dir:', e.message);
+}
 
 app.use(bodyParser.json());
 
@@ -13,8 +24,14 @@ app.use(bodyParser.json());
 app.get('/', (req, res) => {
     res.json({ 
         status: 'running',
-        service: 'Asterisk Trigger API',
-        version: '2.0.0'
+        service: 'Asterisk Telephony API',
+        version: '3.0.0',
+        endpoints: {
+            'POST /call': 'Trigger outbound call with script',
+            'GET /calls': 'List active calls',
+            'POST /hangup': 'Hangup a call',
+            'GET /conversation/:sessionId': 'Get conversation transcript'
+        }
     });
 });
 
@@ -22,36 +39,75 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
-// Trigger an outbound call
-app.post('/call', (req, res) => {
+/**
+ * Trigger an outbound call with a custom script
+ * 
+ * Required: phoneNumber (E.164 format, e.g., +919074691700)
+ * Required: script (text to narrate to the receiver)
+ * Optional: callbackUrl (URL to POST conversation when call ends)
+ */
+app.post('/call', async (req, res) => {
     const { 
         phoneNumber, 
+        script,
+        callbackUrl,
         context = 'outbound-ai-conversational', 
         extension = 's',
         callerId = '+17756187988'
     } = req.body;
 
+    // Validation
     if (!phoneNumber) {
-        return res.status(400).json({ error: 'phoneNumber is required' });
+        return res.status(400).json({ 
+            error: 'phoneNumber is required',
+            format: 'E.164 format (e.g., +919074691700)'
+        });
     }
 
-    console.log(`[${new Date().toISOString()}] Call request: ${phoneNumber} -> ${context}`);
+    if (!script) {
+        return res.status(400).json({ 
+            error: 'script is required',
+            description: 'The exact conversational text for the voice AI to speak'
+        });
+    }
 
-    // Sanitize phone number
+    // Sanitize inputs
     const safeNumber = phoneNumber.replace(/[^0-9+]/g, '');
+    const sessionId = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // Build Asterisk CLI command
-    // When running in Docker, we need to connect to Asterisk differently
-    let command;
-    if (ASTERISK_HOST === 'localhost' || ASTERISK_HOST === '127.0.0.1') {
-        command = `sudo asterisk -rx "channel originate PJSIP/${safeNumber}@twilio-endpoint extension ${extension}@${context}"`;
-    } else {
-        // When in Docker, use SSH or Asterisk Manager Interface (AMI)
-        // For now, assume Asterisk is on host network
-        command = `ssh ${ASTERISK_HOST} 'sudo asterisk -rx "channel originate PJSIP/${safeNumber}@twilio-endpoint extension ${extension}@${context}"'`;
+    // Escape script for shell
+    const safeScript = script.replace(/'/g, "'\\''").replace(/"/g, '\\"');
+    const safeCallback = callbackUrl ? callbackUrl.replace(/'/g, "'\\''") : '';
+
+    console.log(`[${new Date().toISOString()}] Call request:`);
+    console.log(`  Phone: ${safeNumber}`);
+    console.log(`  Script: ${script.substring(0, 100)}...`);
+    console.log(`  Session: ${sessionId}`);
+    console.log(`  Callback: ${callbackUrl || 'none'}`);
+
+    // Store call metadata for the AGI script to read
+    const callData = {
+        sessionId,
+        phoneNumber: safeNumber,
+        script,
+        callbackUrl: callbackUrl || '',
+        startTime: new Date().toISOString(),
+        conversation: []
+    };
+
+    try {
+        fs.writeFileSync(
+            path.join(CONVERSATION_DIR, `${sessionId}.json`),
+            JSON.stringify(callData, null, 2)
+        );
+    } catch (e) {
+        console.error('Failed to write call data:', e.message);
     }
 
-    console.log(`Executing: ${command}`);
+    // Build Asterisk CLI command with channel variables
+    const command = `sudo asterisk -rx "channel originate PJSIP/${safeNumber}@twilio-endpoint extension ${extension}@${context} Set(SCRIPT='${safeScript}') Set(SESSION_ID='${sessionId}') Set(CALLBACK_URL='${safeCallback}')"`;
+
+    console.log(`Executing Asterisk command...`);
 
     exec(command, (error, stdout, stderr) => {
         if (error) {
@@ -61,17 +117,34 @@ app.post('/call', (req, res) => {
                 details: error.message 
             });
         }
-        if (stderr) {
-            console.error(`Stderr: ${stderr}`);
-        }
+
         console.log(`Success: Call initiated to ${safeNumber}`);
         res.json({ 
             message: 'Call initiated successfully', 
             phoneNumber: safeNumber,
-            context: context,
-            output: stdout 
+            sessionId: sessionId,
+            script: script,
+            callbackUrl: callbackUrl || null,
+            note: 'Conversation will be POSTed to callbackUrl when call ends'
         });
     });
+});
+
+// Get conversation transcript
+app.get('/conversation/:sessionId', (req, res) => {
+    const { sessionId } = req.params;
+    const filePath = path.join(CONVERSATION_DIR, `${sessionId}.json`);
+
+    try {
+        if (fs.existsSync(filePath)) {
+            const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            res.json(data);
+        } else {
+            res.status(404).json({ error: 'Conversation not found' });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // List active calls
@@ -100,6 +173,6 @@ app.post('/hangup', (req, res) => {
 });
 
 app.listen(port, '0.0.0.0', () => {
-    console.log(`Asterisk Trigger API listening at http://0.0.0.0:${port}`);
-    console.log(`Asterisk Host: ${ASTERISK_HOST}`);
+    console.log(`Asterisk Telephony API v3.0.0 listening at http://0.0.0.0:${port}`);
+    console.log(`Conversation storage: ${CONVERSATION_DIR}`);
 });
