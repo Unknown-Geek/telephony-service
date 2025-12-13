@@ -8,9 +8,11 @@ fi
 
 # Configuration with defaults
 STT_SERVICE_URL="${STT_SERVICE_URL:-http://localhost:5051/transcribe}"
-LLM_SERVICE_URL="${LLM_SERVICE_URL:-http://localhost:11434/api/generate}"
 TTS_SERVICE_URL="${TTS_SERVICE_URL:-http://localhost:5050/v1/audio/speech}"
-LLM_MODEL="${LLM_MODEL:-llama3.2:1b}"
+
+# Groq API (fast cloud LLM - FREE tier: 30 req/min, 14400 req/day)
+GROQ_API_KEY="${GROQ_API_KEY:-}"
+LLM_MODEL="${LLM_MODEL:-llama-3.3-70b-versatile}"
 LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-100}"
 AI_NAME="${AI_NAME:-Alex}"
 AI_WELCOME_MESSAGE="${AI_WELCOME_MESSAGE:-Hello! I am $AI_NAME, your AI assistant. How can I help you today?}"
@@ -82,15 +84,32 @@ transcribe_audio() {
 
 get_ai_response() {
     local user_text="$1"
-    local PROMPT="$AI_SYSTEM_PROMPT\n\nUser: $user_text\nAssistant:"
-    local PAYLOAD
     local RESPONSE
+    local AI_TEXT
     
-    PAYLOAD=$(jq -n --arg model "$LLM_MODEL" --arg prompt "$PROMPT" --argjson num_predict "$LLM_MAX_TOKENS" \
-        '{model: $model, prompt: $prompt, stream: false, options: {num_predict: $num_predict}}')
+    # Use Groq API (much faster than local Ollama)
+    RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
+        -H "Authorization: Bearer $GROQ_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"model\": \"$LLM_MODEL\",
+            \"messages\": [
+                {\"role\": \"system\", \"content\": \"$AI_SYSTEM_PROMPT\"},
+                {\"role\": \"user\", \"content\": \"$user_text\"}
+            ],
+            \"max_tokens\": $LLM_MAX_TOKENS,
+            \"temperature\": 0.7
+        }" \
+        --max-time $TIMEOUT)
     
-    RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$PAYLOAD" --max-time $TIMEOUT "$LLM_SERVICE_URL")
-    echo "$RESPONSE" | jq -r '.response // empty' 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g'
+    AI_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+    
+    if [ -n "$AI_TEXT" ]; then
+        echo "$AI_TEXT" | tr '\n' ' ' | sed 's/  */ /g'
+    else
+        log_message "Groq error: $RESPONSE"
+        echo "$AI_FALLBACK_MESSAGE"
+    fi
 }
 
 # Main
