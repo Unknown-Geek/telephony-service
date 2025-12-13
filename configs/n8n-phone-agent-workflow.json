@@ -1,0 +1,167 @@
+{
+    "name": "Phone AI Agent",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "phone-agent",
+                "responseMode": "responseNode",
+                "options": {}
+            },
+            "id": "webhook",
+            "name": "Phone Call Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "promptType": "define",
+                "text": "={{ $json.text }}",
+                "options": {
+                    "systemMessage": "You are Alex, a helpful AI phone assistant. You have access to tools to help the user.\n\nIMPORTANT RULES:\n1. Keep responses brief (under 40 words) - this is a phone call\n2. Be conversational and natural\n3. When using tools, briefly explain what you found\n4. If you can't help, be honest about it\n\nAvailable capabilities:\n- Check and read emails\n- Check calendar/schedule\n- Set reminders\n- General knowledge questions"
+                }
+            },
+            "id": "agent",
+            "name": "AI Agent",
+            "type": "@n8n/n8n-nodes-langchain.agent",
+            "typeVersion": 1.7,
+            "position": [
+                500,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "model": "gpt-4o-mini",
+                "options": {}
+            },
+            "id": "openai",
+            "name": "OpenAI Chat Model",
+            "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+            "typeVersion": 1,
+            "position": [
+                500,
+                500
+            ],
+            "credentials": {
+                "openAiApi": {
+                    "id": "YOUR_OPENAI_CREDENTIAL_ID",
+                    "name": "OpenAI account"
+                }
+            }
+        },
+        {
+            "parameters": {},
+            "id": "gmail-tool",
+            "name": "Gmail Tool",
+            "type": "@n8n/n8n-nodes-langchain.toolGmail",
+            "typeVersion": 1,
+            "position": [
+                700,
+                500
+            ],
+            "credentials": {
+                "gmailOAuth2": {
+                    "id": "YOUR_GMAIL_CREDENTIAL_ID",
+                    "name": "Gmail account"
+                }
+            }
+        },
+        {
+            "parameters": {},
+            "id": "calendar-tool",
+            "name": "Google Calendar Tool",
+            "type": "@n8n/n8n-nodes-langchain.toolGoogleCalendar",
+            "typeVersion": 1,
+            "position": [
+                850,
+                500
+            ],
+            "credentials": {
+                "googleCalendarOAuth2Api": {
+                    "id": "YOUR_CALENDAR_CREDENTIAL_ID",
+                    "name": "Google Calendar account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={{ { \"response\": $json.output } }}",
+                "options": {}
+            },
+            "id": "respond",
+            "name": "Respond to Phone",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1.1,
+            "position": [
+                750,
+                300
+            ]
+        }
+    ],
+    "connections": {
+        "Phone Call Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "AI Agent",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "AI Agent": {
+            "main": [
+                [
+                    {
+                        "node": "Respond to Phone",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "OpenAI Chat Model": {
+            "ai_languageModel": [
+                [
+                    {
+                        "node": "AI Agent",
+                        "type": "ai_languageModel",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Gmail Tool": {
+            "ai_tool": [
+                [
+                    {
+                        "node": "AI Agent",
+                        "type": "ai_tool",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Google Calendar Tool": {
+            "ai_tool": [
+                [
+                    {
+                        "node": "AI Agent",
+                        "type": "ai_tool",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    }
+}

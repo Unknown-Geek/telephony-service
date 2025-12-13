@@ -10,9 +10,12 @@ fi
 STT_SERVICE_URL="${STT_SERVICE_URL:-http://localhost:5051/transcribe}"
 TTS_SERVICE_URL="${TTS_SERVICE_URL:-http://localhost:5050/v1/audio/speech}"
 
-# Groq API (fast cloud LLM - FREE tier: 30 req/min, 14400 req/day)
+# n8n AI Agent webhook (for tool-enabled conversations)
+N8N_WEBHOOK_URL="${N8N_WEBHOOK_URL:-https://n8n.shravanpandala.me/webhook/phone-agent}"
+
+# Fallback to Groq if n8n fails (optional)
 GROQ_API_KEY="${GROQ_API_KEY:-}"
-LLM_MODEL="${LLM_MODEL:-llama-3.3-70b-versatile}"
+LLM_MODEL="${LLM_MODEL:-llama-3.1-8b-instant}"
 LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-100}"
 AI_NAME="${AI_NAME:-Alex}"
 AI_WELCOME_MESSAGE="${AI_WELCOME_MESSAGE:-Hello! I am $AI_NAME, your AI assistant. How can I help you today?}"
@@ -87,27 +90,28 @@ get_ai_response() {
     local RESPONSE
     local AI_TEXT
     
-    # Use Groq API (much faster than local Ollama)
-    RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
-        -H "Authorization: Bearer $GROQ_API_KEY" \
+    # Call n8n AI Agent webhook
+    RESPONSE=$(curl -s -X POST "$N8N_WEBHOOK_URL" \
         -H "Content-Type: application/json" \
         -d "{
-            \"model\": \"$LLM_MODEL\",
-            \"messages\": [
-                {\"role\": \"system\", \"content\": \"$AI_SYSTEM_PROMPT\"},
-                {\"role\": \"user\", \"content\": \"$user_text\"}
-            ],
-            \"max_tokens\": $LLM_MAX_TOKENS,
-            \"temperature\": 0.7
+            \"text\": \"$user_text\",
+            \"caller_id\": \"$AGI_CALLERID\",
+            \"session_id\": \"$AGI_UNIQUEID\"
         }" \
         --max-time $TIMEOUT)
     
-    AI_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+    # Try to extract response (n8n can return in different formats)
+    AI_TEXT=$(echo "$RESPONSE" | jq -r '.response // .output // .text // .message // empty' 2>/dev/null)
     
-    if [ -n "$AI_TEXT" ]; then
+    # If JSON parsing fails, use raw response
+    if [ -z "$AI_TEXT" ]; then
+        AI_TEXT=$(echo "$RESPONSE" | head -c 500)
+    fi
+    
+    if [ -n "$AI_TEXT" ] && [ "$AI_TEXT" != "null" ]; then
         echo "$AI_TEXT" | tr '\n' ' ' | sed 's/  */ /g'
     else
-        log_message "Groq error: $RESPONSE"
+        log_message "n8n error: $RESPONSE"
         echo "$AI_FALLBACK_MESSAGE"
     fi
 }
