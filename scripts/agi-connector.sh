@@ -187,11 +187,11 @@ RESP_WAV="${SOUNDS_DIR}/${RESP_FILENAME}.wav"
 
 case "$CMD_MODE" in
     welcome)
-        # Use custom script if provided, otherwise default welcome
+        # Use custom script if provided
         if [ -n "$CUSTOM_SCRIPT" ] && [ "$CUSTOM_SCRIPT" != "(null)" ]; then
-            WELCOME_TEXT="$CUSTOM_SCRIPT"
+            WELCOME_TEXT="$CUSTOM_SCRIPT ... Is there anything you would like to say?"
         else
-            WELCOME_TEXT="Hello! I am ${AI_NAME}, your AI assistant. How can I help you today?"
+            WELCOME_TEXT="Hello! I am ${AI_NAME}, your AI assistant. Is there anything you would like to say?"
         fi
         
         log_message "Welcome: $WELCOME_TEXT"
@@ -214,19 +214,24 @@ case "$CMD_MODE" in
         
         USER_TEXT=$(transcribe_audio "$RECORDING_FILE")
         log_message "User: $USER_TEXT"
-        add_to_conversation "user" "$USER_TEXT"
         
+        # If user said nothing (silence), end the call politely
         if [ -z "$USER_TEXT" ]; then
-            generate_tts "$AI_FALLBACK_MESSAGE" "$RESP_WAV"
-            add_to_conversation "assistant" "$AI_FALLBACK_MESSAGE"
+            GOODBYE="Thank you for your time. Goodbye!"
+            log_message "No response, ending call"
+            add_to_conversation "assistant" "$GOODBYE"
+            generate_tts "$GOODBYE" "$RESP_WAV"
             set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
-            set_variable "AGI_STATUS" "SUCCESS"
+            set_variable "AGI_STATUS" "HANGUP"
+            send_callback
             rm -f "$RECORDING_FILE"
             exit 0
         fi
         
-        # Check for goodbye
-        if echo "$USER_TEXT" | grep -iqE "goodbye|bye|hang up|end call|that's all"; then
+        add_to_conversation "user" "$USER_TEXT"
+        
+        # Check for goodbye phrases
+        if echo "$USER_TEXT" | grep -iqE "goodbye|bye|hang up|end call|that's all|no thank"; then
             generate_tts "$AI_GOODBYE_MESSAGE" "$RESP_WAV"
             add_to_conversation "assistant" "$AI_GOODBYE_MESSAGE"
             set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
@@ -236,7 +241,7 @@ case "$CMD_MODE" in
             exit 0
         fi
         
-        # Get AI response
+        # Get AI response for continued conversation
         AI_RESPONSE=$(get_ai_response "$USER_TEXT")
         log_message "AI: $AI_RESPONSE"
         add_to_conversation "assistant" "$AI_RESPONSE"
