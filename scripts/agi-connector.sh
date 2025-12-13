@@ -1,13 +1,17 @@
 #!/bin/bash
 # =============================================================================
-# AGI Connector Script - Bridge between Asterisk and n8n
+# AGI Connector Script - Local Free AI Stack
 # =============================================================================
+# Uses: Edge-TTS (TTS), faster-whisper (STT), Ollama (LLM)
 # Location: /var/lib/asterisk/agi-bin/agi-connector.sh
 # =============================================================================
 
-# Configuration
-N8N_WEBHOOK_URL="${N8N_WEBHOOK_URL:-https://n8n.shravanpandala.me/webhook/asterisk-call}"
+# Configuration - All Local Services
+STT_SERVICE_URL="${STT_SERVICE_URL:-http://localhost:5051/transcribe}"
+LLM_SERVICE_URL="${LLM_SERVICE_URL:-http://localhost:11434/api/generate}"
 TTS_SERVICE_URL="${TTS_SERVICE_URL:-http://localhost:5050/v1/audio/speech}"
+LLM_MODEL="${LLM_MODEL:-llama3.2:1b}"
+
 SOUNDS_DIR="/var/lib/asterisk/sounds/custom"
 LOG_FILE="/var/log/asterisk/agi-connector.log"
 TIMEOUT=30
@@ -16,8 +20,12 @@ TIMEOUT=30
 CMD_MODE="${1:-welcome}"
 RECORDING_FILE="$2"
 
-# Ensure log directory exists
+# System prompt for the AI
+SYSTEM_PROMPT="You are a helpful AI phone assistant. Keep responses brief and conversational, under 50 words. Be friendly and helpful."
+
+# Ensure directories exist
 mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$SOUNDS_DIR"
 
 # Function to read AGI variables
 read_agi_vars() {
@@ -28,11 +36,7 @@ read_agi_vars() {
         
         case "$var_name" in
             agi_callerid) export AGI_CALLERID="$var_value" ;;
-            agi_calleridname) export AGI_CALLERIDNAME="$var_value" ;;
-            agi_extension) export AGI_EXTENSION="$var_value" ;;
             agi_uniqueid) export AGI_UNIQUEID="$var_value" ;;
-            agi_context) export AGI_CONTEXT="$var_value" ;;
-            agi_channel) export AGI_CHANNEL="$var_value" ;;
         esac
     done
 }
@@ -41,7 +45,7 @@ read_agi_vars() {
 agi_command() {
     echo "$1"
     read response
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - AGI Response: $response" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - AGI: $response" >> "$LOG_FILE"
 }
 
 set_variable() {
@@ -52,76 +56,89 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
 }
 
-handle_response() {
-    RESPONSE="$1"
+# Generate TTS audio using Edge-TTS
+generate_tts() {
+    local text="$1"
+    local output_file="$2"
     
-    # Check for simple text response (non-JSON) or JSON error
-    if echo "$RESPONSE" | grep -q "\"message\":\""; then
-         log_message "n8n response: $RESPONSE"
-    fi
-
-    # Parse response
-    AUDIO_URL=$(echo "$RESPONSE" | jq -r '.audio_url // empty' 2>/dev/null)
-    TEXT_RESPONSE=$(echo "$RESPONSE" | jq -r '.text_response // empty' 2>/dev/null)
-    HANGUP_FLAG=$(echo "$RESPONSE" | jq -r '.hangup // empty' 2>/dev/null)
+    log_message "Generating TTS: $text"
     
-    # Generate unique filename for response
-    # Use EPOCH + RANDOM to avoid collisions in fast loops
-    RESP_FILENAME="response_$(date +%s)_$RANDOM"
-    RESP_WAV="${SOUNDS_DIR}/${RESP_FILENAME}.wav"
-
-    if [ "$HANGUP_FLAG" == "true" ]; then
-        set_variable "AGI_STATUS" "HANGUP"
-        return
-    fi
+    # Call Edge-TTS service
+    TTS_PAYLOAD="{\"model\":\"tts-1\",\"input\":\"$text\",\"voice\":\"alloy\",\"response_format\":\"mp3\"}"
+    TTS_TEMP="${output_file}.mp3"
     
-    if [ -n "$AUDIO_URL" ]; then
-        log_message "Downloading audio from: $AUDIO_URL"
-        curl -s -o "$RESP_WAV" "$AUDIO_URL"
-        
-        if [ -f "$RESP_WAV" ]; then
-            # Ensure it's correct format (convert if needed, but assuming n8n returns wav or compatible)
-            # If n8n returns mp3, convert it
-            FILE_TYPE=$(file -b --mime-type "$RESP_WAV")
-            if [[ "$FILE_TYPE" == "audio/mpeg" ]]; then
-                 mv "$RESP_WAV" "${RESP_WAV}.mp3"
-                 sox "${RESP_WAV}.mp3" -r 8000 -c 1 "$RESP_WAV"
-                 rm "${RESP_WAV}.mp3"
-            elif [[ "$FILE_TYPE" == "audio/x-wav" ]]; then
-                 # Ensure 8k mono
-                 mv "$RESP_WAV" "${RESP_WAV}.tmp.wav"
-                 sox "${RESP_WAV}.tmp.wav" -r 8000 -c 1 "$RESP_WAV"
-                 rm "${RESP_WAV}.tmp.wav"
-            fi
-            
-            set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}" # No extension for Playback
-            set_variable "AGI_STATUS" "SUCCESS"
-        else
-            log_message "ERROR: Failed to download audio"
-            set_variable "AGI_STATUS" "ERROR"
-        fi
-
-    elif [ -n "$TEXT_RESPONSE" ]; then
-        log_message "Generating TTS for: $TEXT_RESPONSE"
-        
-        TTS_PAYLOAD="{\"model\":\"tts-1\",\"input\":\"$TEXT_RESPONSE\",\"voice\":\"alloy\",\"response_format\":\"mp3\"}"
-        TTS_AUDIO="${SOUNDS_DIR}/${RESP_FILENAME}_temp.mp3"
-        
-        curl -s -X POST -H "Content-Type: application/json" -d "$TTS_PAYLOAD" --max-time $TIMEOUT -o "$TTS_AUDIO" "$TTS_SERVICE_URL"
-        
-        if [ -f "$TTS_AUDIO" ] && [ -s "$TTS_AUDIO" ]; then
-            sox "$TTS_AUDIO" -r 8000 -c 1 "$RESP_WAV" 2>/dev/null
-            rm -f "$TTS_AUDIO"
-            
-            set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
-            set_variable "AGI_STATUS" "SUCCESS"
-        else
-            log_message "ERROR: TTS generation failed"
-            set_variable "AGI_STATUS" "TTS_ERROR"
-        fi
+    curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d "$TTS_PAYLOAD" \
+        --max-time $TIMEOUT \
+        -o "$TTS_TEMP" \
+        "$TTS_SERVICE_URL"
+    
+    if [ -f "$TTS_TEMP" ] && [ -s "$TTS_TEMP" ]; then
+        # Convert MP3 to WAV (8kHz mono for telephony)
+        sox "$TTS_TEMP" -r 8000 -c 1 "$output_file" 2>/dev/null
+        rm -f "$TTS_TEMP"
+        return 0
     else
-        log_message "WARNING: No audio or text response. Response was: $RESPONSE"
-        set_variable "AGI_STATUS" "NO_RESPONSE"
+        log_message "ERROR: TTS generation failed"
+        return 1
+    fi
+}
+
+# Transcribe audio using Whisper
+transcribe_audio() {
+    local audio_file="$1"
+    
+    log_message "Transcribing: $audio_file"
+    
+    RESPONSE=$(curl -s -X POST \
+        -F "file=@${audio_file}" \
+        --max-time $TIMEOUT \
+        "$STT_SERVICE_URL")
+    
+    TEXT=$(echo "$RESPONSE" | jq -r '.text // empty' 2>/dev/null)
+    
+    if [ -n "$TEXT" ]; then
+        log_message "Transcribed: $TEXT"
+        echo "$TEXT"
+        return 0
+    else
+        log_message "ERROR: Transcription failed - $RESPONSE"
+        return 1
+    fi
+}
+
+# Get AI response using Ollama
+get_ai_response() {
+    local user_text="$1"
+    
+    log_message "Getting AI response for: $user_text"
+    
+    # Build the prompt with system context
+    PROMPT="$SYSTEM_PROMPT\n\nUser: $user_text\nAssistant:"
+    
+    # Call Ollama
+    PAYLOAD=$(jq -n \
+        --arg model "$LLM_MODEL" \
+        --arg prompt "$PROMPT" \
+        '{model: $model, prompt: $prompt, stream: false}')
+    
+    RESPONSE=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD" \
+        --max-time $TIMEOUT \
+        "$LLM_SERVICE_URL")
+    
+    AI_TEXT=$(echo "$RESPONSE" | jq -r '.response // empty' 2>/dev/null)
+    
+    if [ -n "$AI_TEXT" ]; then
+        log_message "AI Response: $AI_TEXT"
+        echo "$AI_TEXT"
+        return 0
+    else
+        log_message "ERROR: LLM failed - $RESPONSE"
+        echo "I'm sorry, I couldn't process that. Could you please repeat?"
+        return 1
     fi
 }
 
@@ -129,45 +146,67 @@ main() {
     log_message "=== AGI Connector Started (Mode: $CMD_MODE) ==="
     read_agi_vars
     
-    # Common Metadata
-    JSON_META="\"caller_id\": \"${AGI_CALLERID}\", \"unique_id\": \"${AGI_UNIQUEID}\", \"mode\": \"$CMD_MODE\""
+    # Generate unique filename
+    RESP_FILENAME="response_$(date +%s)_$RANDOM"
+    RESP_WAV="${SOUNDS_DIR}/${RESP_FILENAME}.wav"
     
-    RESPONSE=""
-
-    if [ "$CMD_MODE" == "process_input" ]; then
-        if [ -f "$RECORDING_FILE" ]; then
-            log_message "Uploading recording: $RECORDING_FILE"
-            
-            # Send file via multipart/form-data
-            # Note: n8n webhook must separate binary and json fields if confusing, or put meta in query/header
-            # Easiest: Send file as 'file', meta as JSON string in 'data' field
-            
-            RESPONSE=$(curl -s -X POST \
-                -H "Content-Type: multipart/form-data" \
-                -F "file=@${RECORDING_FILE}" \
-                -F "caller_id=${AGI_CALLERID}" \
-                -F "unique_id=${AGI_UNIQUEID}" \
-                -F "mode=process_input" \
-                --max-time $TIMEOUT \
-                "$N8N_WEBHOOK_URL")
+    if [ "$CMD_MODE" == "welcome" ]; then
+        # Generate welcome message
+        WELCOME_TEXT="Hello! I'm your AI assistant. How can I help you today?"
+        
+        if generate_tts "$WELCOME_TEXT" "$RESP_WAV"; then
+            set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
+            set_variable "AGI_STATUS" "SUCCESS"
         else
+            set_variable "AGI_STATUS" "TTS_ERROR"
+        fi
+        
+    elif [ "$CMD_MODE" == "process_input" ]; then
+        if [ ! -f "$RECORDING_FILE" ]; then
             log_message "ERROR: Recording file not found: $RECORDING_FILE"
             set_variable "AGI_STATUS" "ERROR"
-            return
+            exit 1
         fi
-    else
-        # Welcome / Metadata only mode
-        log_message "Sending metadata to n8n..."
-        PAYLOAD="{ $JSON_META }"
         
-        RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            --max-time $TIMEOUT \
-            "$N8N_WEBHOOK_URL")
+        # Step 1: Transcribe audio
+        USER_TEXT=$(transcribe_audio "$RECORDING_FILE")
+        
+        if [ -z "$USER_TEXT" ]; then
+            # Handle silence or failed transcription
+            FALLBACK_TEXT="I didn't catch that. Could you please speak again?"
+            if generate_tts "$FALLBACK_TEXT" "$RESP_WAV"; then
+                set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
+                set_variable "AGI_STATUS" "SUCCESS"
+            else
+                set_variable "AGI_STATUS" "TTS_ERROR"
+            fi
+            exit 0
+        fi
+        
+        # Check for goodbye/hangup keywords
+        if echo "$USER_TEXT" | grep -iqE "goodbye|bye|hang up|end call|that's all"; then
+            GOODBYE_TEXT="Goodbye! Have a great day!"
+            generate_tts "$GOODBYE_TEXT" "$RESP_WAV"
+            set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
+            set_variable "AGI_STATUS" "HANGUP"
+            exit 0
+        fi
+        
+        # Step 2: Get AI response
+        AI_RESPONSE=$(get_ai_response "$USER_TEXT")
+        
+        # Step 3: Generate TTS
+        if generate_tts "$AI_RESPONSE" "$RESP_WAV"; then
+            set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
+            set_variable "AGI_STATUS" "SUCCESS"
+        else
+            set_variable "AGI_STATUS" "TTS_ERROR"
+        fi
+        
+        # Cleanup recording
+        rm -f "$RECORDING_FILE"
     fi
     
-    handle_response "$RESPONSE"
     log_message "=== Finished ==="
 }
 
