@@ -1,41 +1,19 @@
 version: '3.8'
 
 # =============================================================================
-# Telephony Service Docker Compose
+# Telephony Service - Complete AI Stack
 # =============================================================================
-# TTS service for Asterisk telephony integration
-# Isolated network to not interfere with existing containers
+# All services for AI-powered phone conversations:
+# - Edge TTS (Text-to-Speech)
+# - Whisper STT (Speech-to-Text)
+# - Ollama LLM (AI Responses)
+# - API Trigger (Call initiation)
 # =============================================================================
 
 services:
   # ---------------------------------------------------------------------------
-  # Asterisk PBX with PJSIP
-  # Using host network for optimal SIP/RTP performance (no NAT issues)
-  # ---------------------------------------------------------------------------
-  asterisk:
-    image: andrius/asterisk:latest
-    container_name: telephony-asterisk
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      - TZ=UTC
-    volumes:
-      - ./configs/pjsip.conf:/etc/asterisk/pjsip.conf:ro
-      - ./configs/extensions.conf:/etc/asterisk/extensions.conf:ro
-      - ./configs/modules.conf:/etc/asterisk/modules.conf:ro
-      - ./sounds:/var/lib/asterisk/sounds/custom
-      - ./scripts:/var/lib/asterisk/agi-bin
-      - asterisk-logs:/var/log/asterisk
-    cap_add:
-      - NET_ADMIN
-      - SYS_PTRACE
-    depends_on:
-      edge-tts:
-        condition: service_healthy
-
-  # ---------------------------------------------------------------------------
-  # Edge TTS Service (OpenAI-compatible API)
-  # Uses Microsoft Edge TTS - works well on ARM64
+  # Edge TTS Service (Text-to-Speech)
+  # OpenAI-compatible API using Microsoft Edge TTS - FREE
   # ---------------------------------------------------------------------------
   edge-tts:
     image: python:3.11-slim
@@ -60,10 +38,78 @@ services:
       retries: 3
       start_period: 30s
 
+  # ---------------------------------------------------------------------------
+  # Whisper STT Service (Speech-to-Text)
+  # Uses faster-whisper for efficient transcription - FREE
+  # ---------------------------------------------------------------------------
+  whisper-stt:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.stt
+    container_name: telephony-stt
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5051:5051"
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+    volumes:
+      - whisper-cache:/root/.cache
+    networks:
+      - telephony-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5051/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Ollama LLM Service (AI Responses)
+  # Local LLM using Llama 3.2 - FREE
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: telephony-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    environment:
+      - OLLAMA_ORIGINS=*
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - telephony-network
+    # Pull the model on first start
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull ${LLM_MODEL:-llama3.2:1b} && wait"]
+
+  # ---------------------------------------------------------------------------
+  # API Trigger Service (Call Initiation)
+  # HTTP API to start outbound calls
+  # ---------------------------------------------------------------------------
+  api-trigger:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: telephony-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3030:3030"
+    environment:
+      - ASTERISK_HOST=${ASTERISK_HOST:-host.docker.internal}
+    networks:
+      - telephony-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - edge-tts
+      - whisper-stt
+      - ollama
+
 networks:
   telephony-network:
     name: telephony-network
     driver: bridge
 
 volumes:
-  asterisk-logs:
+  whisper-cache:
+  ollama-data:
