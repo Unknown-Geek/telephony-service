@@ -104,8 +104,9 @@ app.post('/call', async (req, res) => {
         console.error('Failed to write call data:', e.message);
     }
 
-    // Build Asterisk CLI command with channel variables
-    const command = `sudo asterisk -rx "channel originate PJSIP/${safeNumber}@twilio-endpoint extension ${extension}@${context} Set(SCRIPT='${safeScript}') Set(SESSION_ID='${sessionId}') Set(CALLBACK_URL='${safeCallback}')"`;
+    // We pass __SESSION_ID (double underscore) to ensure variable inheritance 
+    // persists through channel masquerading/optimization.
+    const command = `sudo asterisk -rx "channel originate PJSIP/${safeNumber}@twilio-endpoint extension ${extension}@${context} __SESSION_ID=${sessionId}"`;
 
     console.log(`Executing Asterisk command...`);
 

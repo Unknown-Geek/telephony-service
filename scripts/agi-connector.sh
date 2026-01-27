@@ -53,21 +53,47 @@ set_variable() {
     agi_command "SET VARIABLE $1 \"$2\""
 }
 
-get_variable() {
+# Global variable for return values
+AGI_RET_VAL=""
+
+get_variable_value() {
+    # Send command to Asterisk
     echo "GET VARIABLE $1"
-    read response
-    echo "$response" | grep -oP '(?<=\().*(?=\))' | sed 's/^1 //'
+    
+    # Read response
+    read -r response
+    log_message "DEBUG: CMD 'GET VARIABLE $1' -> '$response'"
+    
+    # Parse output: 200 result=1 (value)
+    # response format examples:
+    # 200 result=1 (The Value)
+    # 200 result=0
+    
+    # Extract content between parentheses
+    if [[ "$response" =~ \((.*)\) ]]; then
+        AGI_RET_VAL="${BASH_REMATCH[1]}"
+    else
+        AGI_RET_VAL=""
+    fi
 }
 
 # Read AGI environment
 read_agi_vars() {
-    while read line; do
+    log_message "DEBUG: Reading AGI vars..."
+    while read -r line; do
+        # Strip CR
+        line=${line//$'\r'/}
+        
+        # Log for debug
+        # log_message "DEBUG: READ: '$line'"
+        
         [ -z "$line" ] && break
         case "$line" in
             agi_callerid:*) AGI_CALLERID="${line#*: }" ;;
             agi_uniqueid:*) AGI_UNIQUEID="${line#*: }" ;;
         esac
     done
+    log_message "DEBUG: Finished reading vars"
 }
 
 # Add to conversation log
@@ -168,12 +194,34 @@ get_ai_response() {
 read_agi_vars
 log_message "=== AGI Started (Mode: $CMD_MODE) ==="
 
-# Get channel variables set by API
-SESSION_ID=$(get_variable "SESSION_ID")
-CUSTOM_SCRIPT=$(get_variable "SCRIPT")
-CALLBACK_URL=$(get_variable "CALLBACK_URL")
+# Get channel variables
+get_variable_value "SESSION_ID"
+SESSION_ID="$AGI_RET_VAL"
 
-# Fallback session ID
+# Fallback session ID if missing
+if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "(null)" ]; then
+    # Maybe passed as agi_arg? or use uniqueid
+    SESSION_ID="session_${AGI_UNIQUEID}"
+    log_message "WARNING: SESSION_ID not set, using fallback: $SESSION_ID"
+fi
+
+# Load data from JSON file
+JSON_FILE="$CONV_DIR/${SESSION_ID}.json"
+CUSTOM_SCRIPT=""
+CALLBACK_URL=""
+
+if [ -f "$JSON_FILE" ]; then
+    CUSTOM_SCRIPT=$(jq -r '.script // empty' "$JSON_FILE")
+    CALLBACK_URL=$(jq -r '.callbackUrl // empty' "$JSON_FILE")
+    log_message "Loaded data from $JSON_FILE"
+else
+    log_message "ERROR: Conversation file not found: $JSON_FILE"
+fi
+
+log_message "DEBUG: Stats"
+log_message "DEBUG: SESSION_ID=$SESSION_ID"
+log_message "DEBUG: SCRIPT length=${#CUSTOM_SCRIPT}"
+log_message "DEBUG: CALLBACK=$CALLBACK_URL"
 if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "(null)" ]; then
     SESSION_ID="session_${AGI_UNIQUEID}"
 fi
@@ -187,21 +235,26 @@ RESP_WAV="${SOUNDS_DIR}/${RESP_FILENAME}.wav"
 
 case "$CMD_MODE" in
     welcome)
-        # Use custom script if provided
+        # ---------------------------------------------------------------------
+        # ONE-WAY NOTIFICATION MODE
+        # ---------------------------------------------------------------------
+        # Only speak the provided script, then signal to hangup.
+        
         if [ -n "$CUSTOM_SCRIPT" ] && [ "$CUSTOM_SCRIPT" != "(null)" ]; then
-            WELCOME_TEXT="$CUSTOM_SCRIPT ... Is there anything you would like to say?"
+            WELCOME_TEXT="$CUSTOM_SCRIPT"
+            log_message "Narrating Script: $WELCOME_TEXT"
+            add_to_conversation "assistant" "$WELCOME_TEXT"
+            
+            if generate_tts "$WELCOME_TEXT" "$RESP_WAV"; then
+                set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
+                set_variable "AGI_STATUS" "SPEAK_AND_HANGUP"
+            else
+                log_message "TTS Generation Failed"
+                set_variable "AGI_STATUS" "TTS_ERROR"
+            fi
         else
-            WELCOME_TEXT="Hello! I am ${AI_NAME}, your AI assistant. Is there anything you would like to say?"
-        fi
-        
-        log_message "Welcome: $WELCOME_TEXT"
-        add_to_conversation "assistant" "$WELCOME_TEXT"
-        
-        if generate_tts "$WELCOME_TEXT" "$RESP_WAV"; then
-            set_variable "SOUND_FILE" "${SOUNDS_DIR}/${RESP_FILENAME}"
-            set_variable "AGI_STATUS" "SUCCESS"
-        else
-            set_variable "AGI_STATUS" "TTS_ERROR"
+            log_message "No script provided in one-way mode."
+            set_variable "AGI_STATUS" "ERROR"
         fi
         ;;
         
